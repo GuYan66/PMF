@@ -4,6 +4,7 @@ ATIO -- All Trains in One
 from .multiTask import *
 from .singleTask import *
 from .missingTask import *
+from .singleTask.POLMAG import POLMAG
 
 __all__ = ['ATIO']
 
@@ -11,6 +12,7 @@ class ATIO():
     def __init__(self):
         self.TRAIN_MAP = {
             # single-task
+            'pmf': POLMAG,
             'tfn': TFN,
             'lmf': LMF,
             'mfn': MFN,
@@ -36,4 +38,6 @@ class ATIO():
         }
     
     def getTrain(self, args):
+        if args.get('polmag') and args['model_name'] != 'pmf':
+            raise ValueError('The polarity/magnitude trainer is now reserved for PMF.')
         return self.TRAIN_MAP[args['model_name']](args)

@@ -6,6 +6,7 @@ import os
 import pickle
 import random
 import time
+from uuid import uuid4
 from pathlib import Path
 
 import numpy as np
@@ -18,13 +19,14 @@ from .data_loader import MMDataLoader
 from .models import AMIO
 from .trains import ATIO
 from .utils import assign_gpu, count_parameters, setup_seed
+from .utils.polmag_results import prepare_result_files, append_seed_results, append_summary
 
 os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"
 os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:2" # This is crucial for reproducibility
 
 
 SUPPORTED_MODELS = [
-    'LF_DNN', 'EF_LSTM', 'TFN', 'LMF', 'MFN', 'Graph_MFN', 'MFM',
+    'PMF', 'LF_DNN', 'EF_LSTM', 'TFN', 'LMF', 'MFN', 'Graph_MFN', 'MFM',
     'MulT', 'MISA', 'BERT_MAG', 'MLF_DNN', 'MTFN', 'MLMF', 'Self_MM', 'MMIM'
 ]
 SUPPORTED_DATASETS = ['MOSI', 'MOSEI', 'SIMS']
@@ -38,9 +40,14 @@ def _set_logger(log_dir, model_name, dataset_name, verbose_level):
     log_file_path = Path(log_dir) / f"{model_name}-{dataset_name}.log"
     logger = logging.getLogger('MMSA') 
     logger.setLevel(logging.DEBUG)
+    for handler in list(logger.handlers):
+        if getattr(handler, "_mmsa_owned", False):
+            logger.removeHandler(handler)
+            handler.close()
 
     # file handler
-    fh = logging.FileHandler(log_file_path)
+    fh = logging.FileHandler(log_file_path, encoding="utf-8")
+    fh._mmsa_owned = True
     fh_formatter = logging.Formatter('%(asctime)s - %(name)s [%(levelname)s] - %(message)s')
     fh.setLevel(logging.DEBUG)
     fh.setFormatter(fh_formatter)
@@ -49,6 +56,7 @@ def _set_logger(log_dir, model_name, dataset_name, verbose_level):
     # stream handler
     stream_level = {0: logging.ERROR, 1: logging.INFO, 2: logging.DEBUG}
     ch = logging.StreamHandler()
+    ch._mmsa_owned = True
     ch.setLevel(stream_level[verbose_level])
     ch_formatter = logging.Formatter('%(name)s - %(message)s')
     ch.setFormatter(ch_formatter)
@@ -105,6 +113,8 @@ def MMSA_run(
     # Initialization
     model_name = model_name.lower()
     dataset_name = dataset_name.lower()
+    if model_name == "pmf" and is_tune:
+        raise ValueError("PMF currently supports normal runs; pass explicit config overrides for experiments.")
     
     if config_file is not None:
         config_file = Path(config_file)
@@ -133,7 +143,7 @@ def MMSA_run(
         logger.info(f"Tuning with seed {seeds[0]}")
         initial_args = get_config_tune(model_name, dataset_name, config_file)
         initial_args['model_save_path'] = Path(model_save_dir) / f"{initial_args['model_name']}-{initial_args['dataset_name']}.pth"
-        initial_args['device'] = assign_gpu(gpu_ids)
+        initial_args['device'] = torch.device(config['device']) if config and config.get('device') is not None else assign_gpu(gpu_ids)
         initial_args['train_mode'] = 'regression' # backward compatibility. TODO: remove all train_mode in code
         initial_args['custom_feature'] = custom_feature
         initial_args['feature_T'] = feature_T
@@ -143,7 +153,8 @@ def MMSA_run(
         # torch.cuda.set_device() encouraged by pytorch developer, although dicouraged in the doc.
         # https://github.com/pytorch/pytorch/issues/70404#issuecomment-1001113109
         # It solves the bug of RNN always running on gpu 0.
-        torch.cuda.set_device(initial_args['device'])
+        if initial_args['device'].type == 'cuda':
+            torch.cuda.set_device(initial_args['device'])
 
         res_save_dir = Path(res_save_dir) / "tune"
         res_save_dir.mkdir(parents=True, exist_ok=True)
@@ -191,7 +202,7 @@ def MMSA_run(
     else: # run normal
         args = get_config_regression(model_name, dataset_name, config_file)
         args['model_save_path'] = Path(model_save_dir) / f"{args['model_name']}-{args['dataset_name']}.pth"
-        args['device'] = assign_gpu(gpu_ids)
+        args['device'] = torch.device(config['device']) if config and config.get('device') is not None else assign_gpu(gpu_ids)
         args['train_mode'] = 'regression' # backward compatibility. TODO: remove all train_mode in code
         args['custom_feature'] = custom_feature
         args['feature_T'] = feature_T
@@ -205,22 +216,44 @@ def MMSA_run(
         # torch.cuda.set_device() encouraged by pytorch developer, although dicouraged in the doc.
         # https://github.com/pytorch/pytorch/issues/70404#issuecomment-1001113109
         # It solves the bug of RNN always running on gpu 0.
-        torch.cuda.set_device(args['device'])
+        args['device'] = torch.device(args['device'])
+        if args['device'].type == 'cuda':
+            torch.cuda.set_device(args['device'])
 
         logger.info("Running with args:")
         logger.info(args)
         logger.info(f"Seeds: {seeds}")
         res_save_dir = Path(res_save_dir) / "normal"
         res_save_dir.mkdir(parents=True, exist_ok=True)
+        polmag_results = bool(args.get("polmag"))
+        if polmag_results:
+            detail_file, summary_file = prepare_result_files(res_save_dir, dataset_name)
+            run_id = uuid4().hex
+            checkpoint_dir = Path(model_save_dir) / run_id
+            checkpoint_dir.mkdir(parents=True, exist_ok=False)
+            logger.info(f"Run ID: {run_id}")
+            scenario = args.get("evaluation_scenario", "clean")
         model_results = []
         for i, seed in enumerate(seeds):
             setup_seed(seed)
             args['cur_seed'] = i + 1
+            if polmag_results:
+                args['seed'] = seed
+                args['run_id'] = run_id
+                args['model_save_path'] = checkpoint_dir / f"{model_name}-{dataset_name}-seed{seed}.pth"
             logger.info(f"{'-'*30} Running with seed {seed} [{i + 1}/{len(seeds)}] {'-'*30}")
             # actual running
             result = _run(args, num_workers, is_tune)
             logger.info(f"Result for seed {seed}: {result}")
             model_results.append(result)
+            if polmag_results:
+                config_path = Path(args['model_save_path']).with_suffix('.json')
+                config_path.write_text(json.dumps(dict(args), indent=2, ensure_ascii=False, default=str)+"\n", encoding="utf-8")
+                append_seed_results(detail_file, run_id, model_name, seed, scenario, result)
+        if polmag_results:
+            append_summary(summary_file, run_id, model_name, seeds, scenario, model_results)
+            logger.info(f"Per-seed results saved to {detail_file}; summary saved to {summary_file}.")
+            return
         criterions = list(model_results[0].keys())
         # save result to csv
         csv_file = res_save_dir / f"{dataset_name}.csv"
@@ -257,7 +290,7 @@ def _run(args, num_workers=4, is_tune=False, from_sena=False):
     epoch_results = trainer.do_train(model, dataloader, return_epoch_results=from_sena)
     # load trained model & do test
     assert Path(args['model_save_path']).exists()
-    model.load_state_dict(torch.load(args['model_save_path']))
+    model.load_state_dict(torch.load(args['model_save_path'], map_location=args['device'], **({'weights_only': True} if args.get('polmag') else {})))
     model.to(args['device'])
     if from_sena:
         final_results = {}
@@ -272,6 +305,12 @@ def _run(args, num_workers=4, is_tune=False, from_sena=False):
         Path(args['model_save_path']).unlink(missing_ok=True)
     else:
         results = trainer.do_test(model, dataloader['test'], mode="TEST")
+        if args.get("polmag"):
+            # Validation metrics are those of the saved checkpoint, not the last epoch.
+            results = {"valid": trainer.best_validation, "test": results,
+                       "best_epoch": trainer.best_epoch}
+            if "test2" in dataloader:
+                results["test2"] = trainer.do_test(model, dataloader["test2"], mode="TEST2")
 
     del model
     torch.cuda.empty_cache()
@@ -300,7 +339,7 @@ def MMSA_test(
         feature_path: Pkl file path of pre-extracted features.
         gpu_id: Specify which gpu to use. Use cpu if value < 0.
     """
-    if type(config) == str or type(config) == Path:
+    if isinstance(config, (str, Path)):
         config = Path(config)
         with open(config, 'r') as f:
             args = json.load(f)
@@ -308,6 +347,8 @@ def MMSA_test(
         args = config
     else:
         raise ValueError(f"'config' should be string or dict, not {type(config)}")
+    if args.get('model_name') == 'pmf':
+        args = edict(args)
     args['train_mode'] = 'regression' # backward compatibility.
 
     if gpu_id < 0:
@@ -320,7 +361,7 @@ def MMSA_test(
     args['feature_dims'] = [feature['text'].shape[1], feature['audio'].shape[1], feature['vision'].shape[1]]
     args['seq_lens'] = [feature['text'].shape[0], feature['audio'].shape[0], feature['vision'].shape[0]]
     model = AMIO(args)
-    model.load_state_dict(torch.load(weights_path), strict=False)
+    model.load_state_dict(torch.load(weights_path, map_location=device, **({"weights_only": True} if args["model_name"] == "pmf" else {})), strict=(args["model_name"] == "pmf"))
     model.to(device)
     model.eval()
     with torch.no_grad():
@@ -341,7 +382,10 @@ def MMSA_test(
             audio = torch.mean(audio, dim=1, keepdims=True)
             vision = torch.mean(vision, dim=1, keepdims=True)
         # TODO: write a do_single_test function for each model in trains
-        if args['model_name'] == 'self_mm' or args['model_name'] == 'mmim':
+        if args['model_name'] == 'pmf':
+            padding_mask = torch.as_tensor(feature['text_bert'][1], dtype=torch.float32, device=device).unsqueeze(0)
+            output = model(text, audio, vision, padding_mask=padding_mask)
+        elif args['model_name'] == 'self_mm' or args['model_name'] == 'mmim':
             output = model(text, (audio, torch.tensor(audio.shape[1]).unsqueeze(0)), (vision, torch.tensor(vision.shape[1]).unsqueeze(0)))
         elif args['model_name'] == 'tfr_net':
             input_mask = torch.tensor(feature['text_bert'][1]).unsqueeze(0).to(device)

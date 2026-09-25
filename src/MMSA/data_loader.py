@@ -1,4 +1,5 @@
 import logging
+from copy import deepcopy
 import pickle
 
 import numpy as np
@@ -22,6 +23,8 @@ class MMDataset(Dataset):
         DATASET_MAP[args['dataset_name']]()
 
     def __init_mosi(self):
+        if self.args.get('use_padding_mask') and any(self.args.get(k) for k in ('feature_T', 'feature_A', 'feature_V')):
+            raise ValueError('PMF expects modalities and padding masks together in custom_feature.')
         if self.args['custom_feature']:
             # use custom feature file extracted with MMSA-FET
             with open(self.args['custom_feature'], 'rb') as f:
@@ -41,6 +44,13 @@ class MMDataset(Dataset):
         self.args['feature_dims'][1] = self.audio.shape[2]
         self.vision = data[self.mode]['vision'].astype(np.float32)
         self.args['feature_dims'][2] = self.vision.shape[2]
+        if self.args.get('use_padding_mask'):
+            self.padding_mask = data[self.mode]['text_bert'][:, 1, :].astype(np.float32)
+            expected = self.padding_mask.shape
+            if any(value.shape[:2] != expected for value in (self.text, self.audio, self.vision)):
+                raise ValueError('PMF padding mask must match all aligned modality sequences.')
+            if not np.isin(self.padding_mask, [0, 1]).all() or (self.padding_mask.sum(axis=1) == 0).any():
+                raise ValueError('PMF requires a binary padding mask with valid positions.')
         self.raw_text = data[self.mode]['raw_text']
         self.ids = data[self.mode]['id']
 
@@ -201,6 +211,8 @@ class MMDataset(Dataset):
             'id': self.ids[index],
             'labels': {k: torch.Tensor(v[index].reshape(-1)) for k, v in self.labels.items()}
         } 
+        if self.args.get('use_padding_mask'):
+            sample['padding_mask'] = torch.from_numpy(self.padding_mask[index])
         if not self.args['need_data_aligned']:
             sample['audio_lengths'] = self.audio_lengths[index]
             sample['vision_lengths'] = self.vision_lengths[index]
@@ -226,6 +238,16 @@ def MMDataLoader(args, num_workers):
         'test': MMDataset(args, mode='test')
     }
 
+    if args.get('test2_feature'):
+        if not args['need_data_aligned']:
+            raise ValueError('Attachment-3 test2 currently requires aligned inputs.')
+        if any(args.get(key) for key in ('feature_T', 'feature_A', 'feature_V')):
+            raise ValueError('test2 cannot use train/valid/test modality override files.')
+        test2_args = deepcopy(args)
+        test2_args['custom_feature'] = args['test2_feature']
+        test2_args['data_missing'] = False  # Attachment 3 already contains missing segments.
+        datasets['test2'] = MMDataset(test2_args, mode='test2')
+
     if 'seq_lens' in args:
         args['seq_lens'] = datasets['train'].get_seq_len() 
 
@@ -233,7 +255,7 @@ def MMDataLoader(args, num_workers):
         ds: DataLoader(datasets[ds],
                        batch_size=args['batch_size'],
                        num_workers=num_workers,
-                       shuffle=True)
+                       shuffle=(ds != 'test2'))
         for ds in datasets.keys()
     }
     

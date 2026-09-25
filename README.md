@@ -1,191 +1,92 @@
-[![](https://badgen.net/badge/license/MIT/green)](#License)
-[![](https://badgen.net/pypi/v/MMSA)](https://pypi.org/project/MMSA/) 
-![](https://badgen.net/pypi/python/MMSA/)
-[![](https://badgen.net/badge/contact/THUIAR/purple)](https://thuiar.github.io/)
+# MMSA + PMF
 
-# MMSA
+基于 [THUIAR/MMSA](https://github.com/thuiar/MMSA) 的团队代码版本，新增最简基线 **PMF（Pooling-based Multimodal Fusion）**。原始 MMSA 模型保留上游实现；本项目的双头训练仅用于 PMF。
 
-MMSA is a unified framework for Multimodal Sentiment Analysis.
-
-### Features
-
-- Train, test and compare multiple MSA models in a unified framework.
-- Supports [15](#3-supported-msa-models) MSA models, including recent works.
-- Supports 3 MSA datasets: [MOSI](https://ieeexplore.ieee.org/abstract/document/7742221), [MOSEI](https://aclanthology.org/P18-1208.pdf), and [CH-SIMS](https://aclanthology.org/2020.acl-main.343/).
-- Easy to use, provides Python APIs and commandline tools.
-- Experiment with fully customized multimodal features extracted by [MMSA-FET](https://github.com/thuiar/MMSA-FET) toolkit.
-
-## 1. Get Started
-
-> **Note:** From version 2.0, we packaged the project and uploaded it to PyPI in the hope of making it easier to use. If you don't like the new structure, you can always switch back to `v_1.0` branch. 
-
-### 1.1 Use Python API
-
-- Run `pip install MMSA` in your python virtual environment.
-- Import and use in any python file:
-
-  ```python
-  from MMSA import MMSA_run
-
-  # run LMF on MOSI with default hyper parameters
-  MMSA_run('lmf', 'mosi', seeds=[1111, 1112, 1113], gpu_ids=[0])
-
-  # tune Self_mm on MOSEI with default hyper parameter range
-  MMSA_run('self_mm', 'mosei', seeds=[1111], gpu_ids=[1])
-
-  # run TFN on SIMS with altered config
-  config = get_config_regression('tfn', 'mosi')
-  config['post_fusion_dim'] = 32
-  config['featurePath'] = '~/feature.pkl'
-  MMSA_run('tfn', 'mosi', config=config, seeds=[1111])
-
-  # run MTFN on SIMS with custom config file
-  MMSA_run('mtfn', 'sims', config_file='./config.json')
-  ```
-
-- For more detailed usage, please refer to [APIs](https://github.com/thuiar/MMSA/wiki/APIs).
-
-### 1.2 Use Commandline Tool
-
-- Run `pip install MMSA` in your python virtual environment.
-- Use from command line:
-
-  ```bash
-  # show usage
-  $ python -m MMSA -h
-
-  # train & test LMF on MOSI with default parameters
-  $ python -m MMSA -d mosi -m lmf -s 1111 -s 1112
-
-  # tune 50 times of TFN on MOSEI with custom config file & custom save dir
-  $ python -m MMSA -d mosei -m tfn -t -tt 30 --model-save-dir ./models --res-save-dir ./results
-
-  # train & test self_mm on SIMS with custom audio features & use gpu2
-  $ python -m MMSA -d sims -m self_mm -Fa ./Features/Feature-A.pkl --gpu-ids 2
-  ```
-
-- For more detailed usage, please refer to [Commandline Arguments](https://github.com/thuiar/MMSA/wiki/Commandline-Arguments).
-
-### 1.3 Clone & Edit the Code
-
-- Clone this repo and install requirements.
-  ```bash
-  $ git clone https://github.com/thuiar/MMSA
-  ```
-- Edit the codes to your needs. See [Code Structure](https://github.com/thuiar/MMSA/wiki/Code-Structure) for a basic review of our code structure.
-- After editing, run the following commands:
-  ```bash
-  $ cd MMSA-master # make sure you're in the top directory
-  $ pip install .
-  ```
-- Then run the code like above sections.
-- To further change the code, you need to re-install the package:
-  ```bash
-  $ pip uninstall MMSA
-  $ pip install .
-  ```
-- If you'd rather run the code without installation(like in v_1.0), please refer to [Run Code without Installation](https://github.com/thuiar/MMSA/wiki/Run-Code-without-Installation).
-
-## 2. Datasets
-
-MMSA currently supports MOSI, MOSEI, and CH-SIMS dataset. Use the following links to download raw videos, feature files and label files. You don't need to download raw videos if you're not planning to run end-to-end tasks. 
-
-
-- [BaiduYun Disk](https://pan.baidu.com/s/1a1bDX5htPsZjsRyHcvCKHw?pwd=qq0b) `code: qq0b`
-- [Google Drive](https://drive.google.com/drive/folders/1A2S4pqCHryGmiqnNSPLv7rEg63WvjCSk?usp=sharing)
-
-SHA-256 for feature files:
+PMF 使用已提取的对齐特征，不微调特征提取器：
 
 ```text
-`MOSI/Processed/unaligned_50.pkl`:  `78e0f8b5ef8ff71558e7307848fc1fa929ecb078203f565ab22b9daab2e02524`
-`MOSI/Processed/aligned_50.pkl`:    `d3994fd25681f9c7ad6e9c6596a6fe9b4beb85ff7d478ba978b124139002e5f9`
-`MOSEI/Processed/unaligned_50.pkl`: `ad8b23d50557045e7d47959ce6c5b955d8d983f2979c7d9b7b9226f6dd6fec1f`
-`MOSEI/Processed/aligned_50.pkl`:   `45eccfb748a87c80ecab9bfac29582e7b1466bf6605ff29d3b338a75120bf791`
-`SIMS/Processed/unaligned_39.pkl`:  `c9e20c13ec0454d98bb9c1e520e490c75146bfa2dfeeea78d84de047dbdd442f`
+文本 50×768 ─ 掩码均值池化 ─ 训练集标准化 ─ Linear→128 ─ ReLU ┐
+音频 50×74  ─ 掩码均值池化 ─ 训练集标准化 ─ Linear→128 ─ ReLU ┼ 拼接384
+视觉 50×35  ─ 掩码均值池化 ─ 训练集标准化 ─ Linear→128 ─ ReLU ┘
+       → Linear(384,128) → ReLU → Dropout(0.2)
+       → 极性头 Linear(128,3) / 幅度头 3×sigmoid(Linear(128,1))
 ```
 
-MMSA uses feature files that are organized as follows:
+默认可训练参数 **162,436**。普通交叉熵 + 真实非中性样本的幅度 L1；预测中性时最终强度为 0。
 
-```python
-{
-    "train": {
-        "raw_text": [],              # raw text
-        "audio": [],                 # audio feature
-        "vision": [],                # video feature
-        "id": [],                    # [video_id$_$clip_id, ..., ...]
-        "text": [],                  # bert feature
-        "text_bert": [],             # word ids for bert
-        "audio_lengths": [],         # audio feature lenth(over time) for every sample
-        "vision_lengths": [],        # same as audio_lengths
-        "annotations": [],           # strings
-        "classification_labels": [], # Negative(0), Neutral(1), Positive(2). Deprecated in v_2.0
-        "regression_labels": []      # Negative(<0), Neutral(0), Positive(>0)
-    },
-    "valid": {***},                  # same as "train"
-    "test": {***},                   # same as "train"
-}
+## 1. 安装
+
+建议使用独立的 **Python 3.10** 环境。在本仓库根目录执行：
+
+```bash
+python -m pip install torch==2.4.1 --index-url https://download.pytorch.org/whl/cpu
+python -m pip install -c constraints/py310-tested.txt -e .
 ```
 
-> **Note:** For MOSI and MOSEI, the pre-extracted text features are from BERT, different from the original glove features in the [CMU-Multimodal-SDK](http://immortal.multicomp.cs.cmu.edu/raw_datasets/processed_data/).
+上面安装 CPU 版。GPU 安装步骤、环境范围见 [安装说明](docs/INSTALL.md)。约束文件记录已测试的核心依赖，不是全量依赖锁。
 
-> **Note:** If you wish to extract customized multimodal features, please try out our [MMSA-FET](https://github.com/thuiar/MMSA-FET)
+## 2. 准备数据
 
+数据和模型产物单独共享，不放入 Git。最低需要附件 2 的 `aligned_50.pkl`，例如放在 `data/aligned_50.pkl`。
+可选的附件 3 `test2_aligned_50.pkl` 放在 `data/attachment3/`。
 
-## 3. Supported MSA Models
+输入字段和 test2 使用方式见 [数据说明](data/README.md)。只有附件 2 就可以训练，test2 是可选项。
 
-|    Type     |                   Model Name                            |                                          From                                          |    Published      |
-| :---------: | :-----------------------------------------------------: | :------------------------------------------------------------------------------------: | :---------------: |
-| Single-Task |        [TFN](src/MMSA/models/singleTask/TFN.py)         |        [Tensor-Fusion-Network](https://github.com/A2Zadeh/TensorFusionNetwork)         | EMNLP 2017        |
-| Single-Task |    [EF_LSTM](src/MMSA/models/singleTask/EF_LSTM.py)     |               [MultimodalDNN](https://github.com/rhoposit/MultimodalDNN)               | ACL 2018 Workshop |
-| Single-Task |     [LF_DNN](src/MMSA/models/singleTask/LF_DNN.py)      |               [MultimodalDNN](https://github.com/rhoposit/MultimodalDNN)               | ACL 2018 Workshop |
-| Single-Task |        [LMF](src/MMSA/models/singleTask/LMF.py)         | [Low-rank-Multimodal-Fusion](https://github.com/Justin1904/Low-rank-Multimodal-Fusion) | ACL 2018          |
-| Single-Task |        [MFN](src/MMSA/models/singleTask/MFN.py)         |               [Memory-Fusion-Network](https://github.com/pliang279/MFN)                | AAAI 2018         |
-| Single-Task |  [Graph-MFN](src/MMSA/models/singleTask/Graph_MFN.py)   |    [Graph-Memory-Fusion-Network](https://github.com/A2Zadeh/CMU-MultimodalSDK/)        | ACL 2018          |
-| Single-Task | [MulT](src/MMSA/models/singleTask/MulT.py)(without CTC) |      [Multimodal-Transformer](https://github.com/yaohungt/Multimodal-Transformer)      | ACL 2019          |
-| Single-Task |        [MFM](src/MMSA/models/singleTask/MFM.py)         |                     [MFM](https://github.com/pliang279/factorized/)                    | ICRL 2019         |
-| Multi-Task  |     [MLF_DNN](src/MMSA/models/multiTask/MLF_DNN.py)     |                         [MMSA](https://github.com/thuiar/MMSA)                         | ACL 2020          |
-| Multi-Task  |        [MTFN](src/MMSA/models/multiTask/MTFN.py)        |                         [MMSA](https://github.com/thuiar/MMSA)                         | ACL 2020          |
-| Multi-Task  |        [MLMF](src/MMSA/models/multiTask/MLMF.py)        |                         [MMSA](https://github.com/thuiar/MMSA)                         | ACL 2020          |
-| Multi-Task  |     [SELF_MM](src/MMSA/models/multiTask/SELF_MM.py)     |                      [Self-MM](https://github.com/thuiar/Self-MM)                      | AAAI 2021         |
-| Single-Task |   [BERT-MAG](src/MMSA/models/singleTask/BERT_MAG.py)    |        [MAG-BERT](https://github.com/WasifurRahman/BERT_multimodal_transformer)        | ACL 2020          |
-| Single-Task |       [MISA](src/MMSA/models/singleTask/MISA.py)        |                      [MISA](https://github.com/declare-lab/MISA)                       | ACMMM 2020        |
-| Single-Task |       [MMIM](src/MMSA/models/singleTask/MMIM.py)        |            [MMIM](https://github.com/declare-lab/Multimodal-Infomax)                   | EMNLP 2021        |
-| Single-Task |           BBFN (Work in Progress)                       |               [BBFN](https://github.com/declare-lab/BBFN)                              | ICMI 2021         |
-| Single-Task |           [CENET](src/MMSA/models/singleTask/CENET.py)  |               [CENET](https://github.com/Say2L/CENet)                                  | TMM 2022          |
-| Multi-Task  |     [TETFN](src/MMSA/models/multiTask/TETFN.py)         |                      TETFN                                                             | PR 2023           |  
-| Single-Task |           [ALMT](src/MMSA/models/singleTask/ALMT.py)  |               [ALMT](https://github.com/Haoyu-ha/ALMT)                                  | EMNLP 2023          |
+## 3. 检查和训练
 
+先校验数据与前向流程，不训练、不保存产物：
 
-## 4. Results
-
-Baseline results are reported in [results/result-stat.md](results/result-stat.md)
-
-## 5. Citation
-
-- [CH-SIMS: A Chinese Multimodal Sentiment Analysis Dataset with Fine-grained Annotations of Modality](https://www.aclweb.org/anthology/2020.acl-main.343/)
-- [Learning Modality-Specific Representations with Self-Supervised Multi-Task Learning for Multimodal Sentiment Analysis](https://arxiv.org/abs/2102.04830)
-- [M-SENA: An Integrated Platform for Multimodal Sentiment Analysis]()
-
-Please cite our paper if you find our work useful for your research:
-
-```
-@inproceedings{yu2020ch,
-  title={CH-SIMS: A Chinese Multimodal Sentiment Analysis Dataset with Fine-grained Annotation of Modality},
-  author={Yu, Wenmeng and Xu, Hua and Meng, Fanyang and Zhu, Yilin and Ma, Yixiao and Wu, Jiele and Zou, Jiyun and Yang, Kaicheng},
-  booktitle={Proceedings of the 58th Annual Meeting of the Association for Computational Linguistics},
-  pages={3718--3727},
-  year={2020}
-}
+```bash
+python scripts/train_pmf.py --data data/aligned_50.pkl --device cpu --dry-run
 ```
 
+正式训练：
+
+```bash
+python scripts/train_pmf.py --data data/aligned_50.pkl --config configs/pmf.example.json --device cpu --seeds 1111 1112 1113
 ```
-@inproceedings{yu2021learning,
-  title={Learning Modality-Specific Representations with Self-Supervised Multi-Task Learning for Multimodal Sentiment Analysis},
-  author={Yu, Wenmeng and Xu, Hua and Yuan, Ziqi and Wu, Jiele},
-  booktitle={Proceedings of the AAAI Conference on Artificial Intelligence},
-  volume={35},
-  number={12},
-  pages={10790--10797},
-  year={2021}
-}
+
+GPU 使用 `--device cuda:0`，也可使用默认的 `auto`。启用附件 3 时追加：
+
+```text
+--test2 data/attachment3/test2_aligned_50.pkl
 ```
+
+用 `--output-dir` 指定产物目录，默认 `outputs/`。所有输入路径相对于当前工作目录。
+
+## 4. 输出与评测
+
+```text
+outputs/
+  saved_models/<run_id>/pmf-mosei-seed1111.pth
+  saved_models/<run_id>/pmf-mosei-seed1111.json
+  results/normal/mosei_polmag_v1.csv
+  results/normal/mosei_polmag_v1_summary.csv
+  logs/pmf-mosei.log
+```
+
+每个种子保留自己的权重和完整配置；不同运行使用不同 run_id。标准化统计量保存在权重中。
+
+- `acc3`、`macro_f1`：负向/中性/正向三分类；`mae`、`corr`：全部样本的最终有符号强度。
+- CSV 保存原始数值，不乘 100；未定义的 Corr 留空，汇总表用 corr_n 标识有效种子数。
+- 原 train 训练，valid MacroF1 选择检查点；test、test2 在加载最佳检查点后评测。选择规则保持四位小数 MacroF1 严格提升。
+- test2 为公开来源参考标签评测，单独记为 `split=test2`，不用于训练或选模型。它与原 test 有 4 条相同片段，不能将两组当作完全独立证据。
+- 多种子汇总的标准差使用 ddof=0；已有 CSV 表头不兼容时在训练前报错。
+
+## 5. 推理和测试
+
+```bash
+python scripts/predict_pmf.py --config outputs/saved_models/RUN_ID/pmf-mosei-seed1111.json --weights outputs/saved_models/RUN_ID/pmf-mosei-seed1111.pth --features data/attachment3/test2_aligned_50.pkl --output outputs/predictions.json
+python -m unittest discover -s tests -v
+```
+
+将 RUN_ID 换为实际目录名。推理也接受包含 text、text_bert、audio、vision 的单样本平铺 pickle，输出极性类别、幅度和最终强度，不读取标签来生成预测。
+
+## 文档与来源
+
+- [PMF 结构和扩展约定](docs/PMF.md)
+- [团队共享与上传 Git](docs/SHARING.md)
+- [改动记录](CHANGELOG.md)
+- [上游版本与许可证](UPSTREAM.md)，[上游 README 原文](docs/UPSTREAM_README.md)
+
+沿用上游 MIT 许可证，详见 [LICENSE](LICENSE)。自动化工作流只运行测试，不自动发布 PyPI。CI 配置覆盖 Linux/Windows；发布前的本地检查范围记录在 [验证记录](docs/VERIFICATION.md)。

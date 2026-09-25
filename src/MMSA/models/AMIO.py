@@ -14,6 +14,7 @@ class AMIO(nn.Module):
         super(AMIO, self).__init__()
         self.MODEL_MAP = {
             # single-task
+            'pmf': PMF,
             'tfn': TFN,
             'lmf': LMF,
             'mfn': MFN,

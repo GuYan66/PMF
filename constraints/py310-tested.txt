@@ -1,0 +1,13 @@
+# Core versions tested on Python 3.10; choose CPU/CUDA torch separately.
+# Core constraints only, not a full transitive lock file.
+torch==2.4.1
+transformers==4.46.3
+numpy==2.2.6
+pandas==2.3.3
+scipy==1.15.3
+tqdm==4.70.1
+scikit-learn==1.7.2
+easydict==1.13
+pytorch-transformers==1.2.0
+einops==0.8.2
+nvidia-ml-py3==7.352.0

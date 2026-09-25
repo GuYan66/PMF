@@ -1704,5 +1704,28 @@
         "fusion_layer_depth": 4
       }
     }
+  },
+  "pmf": {
+    "commonParams": {
+      "need_data_aligned": true,
+      "need_model_aligned": false,
+      "need_normalized": false,
+      "use_bert": false,
+      "use_padding_mask": true,
+      "polmag": true,
+      "early_stop": 8
+    },
+    "datasetParams": {
+      "mosei": {
+        "projection_dim": 128,
+        "fusion_dim": 128,
+        "dropout": 0.2,
+        "batch_size": 64,
+        "learning_rate": 0.001,
+        "weight_decay": 0.0,
+        "standardization_eps": 1e-06,
+        "KeyEval": "MacroF1"
+      }
+    }
   }
 }
